@@ -12,9 +12,11 @@ namespace LeadGeneration.Infrastructure.Repository
 {
     public sealed class LeadRepository : ILeadRepository
     {
-        private readonly MongoDbContext _db;
-
-        public LeadRepository(MongoDbContext db) => _db = db;
+        private readonly MongoDbContext _context;
+        public LeadRepository(MongoDbContext context)
+        {
+            _context = context;
+        }
 
         // ---------------- LEADS ----------------
 
@@ -23,7 +25,7 @@ namespace LeadGeneration.Infrastructure.Repository
             CancellationToken ct = default)
         {
             var filter = BuildLeadFilter(criteria);
-            var find = _db.Leads.Find(filter).SortByDescending(x => x.LastUpdatedUtc);
+            var find = _context.Leads.Find(filter).SortByDescending(x => x.LastUpdatedUtc);
 
             var skip = (criteria.Page - 1) * criteria.PageSize;
             var total = await find.CountDocumentsAsync(ct);
@@ -44,7 +46,7 @@ namespace LeadGeneration.Infrastructure.Repository
         {
             if (string.IsNullOrWhiteSpace(leadId)) return null;
             var filter = Builders<Lead>.Filter.Eq(x => x.Id, leadId);
-            return await _db.Leads.Find(filter).FirstOrDefaultAsync(ct);
+            return await _context.Leads.Find(filter).FirstOrDefaultAsync(ct);
         }
 
         public async Task<IReadOnlyList<string>> UpsertLeadsAsync(
@@ -95,7 +97,7 @@ namespace LeadGeneration.Infrastructure.Repository
 
             if (requests.Count == 0) return Array.Empty<string>();
 
-            await _db.Leads.BulkWriteAsync(requests, new BulkWriteOptions { IsOrdered = false }, ct);
+            await _context.Leads.BulkWriteAsync(requests, new BulkWriteOptions { IsOrdered = false }, ct);
             return leads.Select(l => l.Id).ToArray();
         }
 
@@ -139,7 +141,7 @@ namespace LeadGeneration.Infrastructure.Repository
         public Task<Company?> GetCompanyByDomainAsync(string domain, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(domain)) return Task.FromResult<Company?>(null);
-            return _db.Companies.Find(c => c.Domain == domain).FirstOrDefaultAsync(ct);
+            return _context.Companies.Find(c => c.Domain == domain).FirstOrDefaultAsync(ct);
         }
 
         public async Task<IReadOnlyList<string>> UpsertCompaniesAsync(
@@ -173,7 +175,7 @@ namespace LeadGeneration.Infrastructure.Repository
             }
 
             if (requests.Count > 0)
-                await _db.Companies.BulkWriteAsync(requests, new BulkWriteOptions { IsOrdered = false }, ct);
+                await _context.Companies.BulkWriteAsync(requests, new BulkWriteOptions { IsOrdered = false }, ct);
 
             return ids;
         }
@@ -183,7 +185,7 @@ namespace LeadGeneration.Infrastructure.Repository
             page = page <= 0 ? 1 : page;
             pageSize = pageSize <= 0 ? 10 : pageSize;
 
-            var find = _db.Companies.Find(Builders<Company>.Filter.Empty)
+            var find = _context.Companies.Find(Builders<Company>.Filter.Empty)
                                     .SortBy(c => c.Name);
 
             var skip = (page - 1) * pageSize;
@@ -212,7 +214,7 @@ namespace LeadGeneration.Infrastructure.Repository
                 CreatedUtc = DateTime.UtcNow,
                 LeadIds = new List<string>()
             };
-            await _db.ProspectLists.InsertOneAsync(doc, cancellationToken: ct);
+            await _context.ProspectLists.InsertOneAsync(doc, cancellationToken: ct);
             return doc.Id;
         }
 
@@ -220,24 +222,24 @@ namespace LeadGeneration.Infrastructure.Repository
         {
             var filter = Builders<ProspectList>.Filter.Eq(x => x.Id, listId);
             var update = Builders<ProspectList>.Update.AddToSetEach(x => x.LeadIds, leadIds.ToList());
-            await _db.ProspectLists.UpdateOneAsync(filter, update, cancellationToken: ct);
+            await _context.ProspectLists.UpdateOneAsync(filter, update, cancellationToken: ct);
         }
 
         public async Task RemoveLeadsFromListAsync(string listId, IEnumerable<string> leadIds, CancellationToken ct = default)
         {
             var filter = Builders<ProspectList>.Filter.Eq(x => x.Id, listId);
             var update = Builders<ProspectList>.Update.PullAll(x => x.LeadIds, leadIds.ToList());
-            await _db.ProspectLists.UpdateOneAsync(filter, update, cancellationToken: ct);
+            await _context.ProspectLists.UpdateOneAsync(filter, update, cancellationToken: ct);
         }
 
         public Task<ProspectList?> GetListByIdAsync(string listId, CancellationToken ct = default)
         {
-            return _db.ProspectLists.Find(l => l.Id == listId).FirstOrDefaultAsync(ct);
+            return _context.ProspectLists.Find(l => l.Id == listId).FirstOrDefaultAsync(ct);
         }
 
         public async Task<PagedResult<ProspectList>> GetListsAsync(int page, int pageSize, CancellationToken ct = default)
         {
-            var find = _db.ProspectLists.Find(Builders<ProspectList>.Filter.Empty)
+            var find = _context.ProspectLists.Find(Builders<ProspectList>.Filter.Empty)
                                         .SortByDescending(l => l.CreatedUtc);
 
             var skip = (page - 1) * pageSize;
@@ -261,18 +263,18 @@ namespace LeadGeneration.Infrastructure.Repository
                 sequence.Id = ObjectId.GenerateNewId().ToString();
 
             sequence.CreatedUtc = sequence.CreatedUtc == default ? DateTime.UtcNow : sequence.CreatedUtc;
-            await _db.Sequences.InsertOneAsync(sequence, cancellationToken: ct);
+            await _context.Sequences.InsertOneAsync(sequence, cancellationToken: ct);
             return sequence.Id;
         }
 
         public Task<Sequence?> GetSequenceAsync(string sequenceId, CancellationToken ct = default)
         {
-            return _db.Sequences.Find(s => s.Id == sequenceId).FirstOrDefaultAsync(ct);
+            return _context.Sequences.Find(s => s.Id == sequenceId).FirstOrDefaultAsync(ct);
         }
 
         public async Task<PagedResult<Sequence>> GetSequencesAsync(int page, int pageSize, CancellationToken ct = default)
         {
-            var find = _db.Sequences.Find(Builders<Sequence>.Filter.Empty)
+            var find = _context.Sequences.Find(Builders<Sequence>.Filter.Empty)
                                     .SortByDescending(s => s.CreatedUtc);
             var skip = (page - 1) * pageSize;
             var total = await find.CountDocumentsAsync(ct);
@@ -296,7 +298,7 @@ namespace LeadGeneration.Infrastructure.Repository
             if (log.OccurredUtc == default)
                 log.OccurredUtc = DateTime.UtcNow;
 
-            await _db.EngagementLogs.InsertOneAsync(log, cancellationToken: ct);
+            await _context.EngagementLogs.InsertOneAsync(log, cancellationToken: ct);
         }
     }
 }
