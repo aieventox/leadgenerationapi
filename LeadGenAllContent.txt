@@ -1,0 +1,2247 @@
+
+
+using LeadGeneration.Application.Services;
+using Microsoft.AspNetCore.Mvc;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.API.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class ApolloController : ControllerBase
+    {
+        private readonly ApolloService _apolloService;
+
+        public ApolloController(ApolloService apolloService)
+        {
+            _apolloService = apolloService;
+        }
+
+        [HttpGet("search")]
+        public async Task<IActionResult> SearchPeople([FromQuery] string keyword)
+        {
+            var result = await _apolloService.SearchPeopleAsync(keyword);
+            return Ok(result);
+        }
+    }
+}
+
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Application.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class CompaniesController : ControllerBase
+    {
+        private readonly CompanyService _service;
+
+        public CompaniesController(CompanyService service) =>
+            _service = service;
+
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] CreateCompanyDto dto)
+        {
+            await _service.AddCompanyAsync(dto);
+            return Ok("Company added successfully.");
+        }
+
+        [HttpGet("search")]
+        public async Task<IActionResult> Search([FromQuery] string industry, [FromQuery] string location, [FromQuery] string name)
+        {
+            var results = await _service.SearchCompaniesAsync(industry, location, name);
+            return Ok(results);
+        }
+    }
+}
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Application.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class ContactsController : ControllerBase
+    {
+        private readonly ContactService _service;
+        private readonly ContactEnrichmentService _enrichmentService;
+
+        public ContactsController(ContactService service)
+        {
+            _service = service;
+        }
+
+
+        // POST /api/contacts → add a contact
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] CreateContactDto dto)
+        {
+            if (dto == null)
+                return BadRequest("Invalid contact data.");
+
+            await _service.AddContactAsync(dto);
+            return Ok("Contact added successfully.");
+        }
+
+        // GET /api/contacts/search?title=CTO&company=microsoft
+        [HttpGet("search")]
+        public async Task<IActionResult> Search(
+            [FromQuery] string title,
+            [FromQuery] string company)
+        {
+            var results = await _service.SearchContactsAsync(title, company);
+            return Ok(results);
+        }
+
+        [HttpPost("enrich/{id}")]
+        public async Task<IActionResult> EnrichOne(string id)
+        {
+            var result = await _enrichmentService.EnrichOneAsync(id);
+            return Ok(result);
+        }
+
+        [HttpPost("bulk-enrich")]
+        public async Task<IActionResult> BulkEnrich([FromBody] List<string> ids)
+        {
+            var results = await _enrichmentService.BulkEnrichAsync(ids);
+            return Ok(results);
+        }
+
+    }
+}
+
+using LeadGeneration.Domain.Interfaces;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class ListExportsController : ControllerBase
+    {
+        private readonly IListRepository _listRepo;
+        private readonly IContactRepository _contactRepo;
+        private readonly IExportService _exportService;
+
+        public ListExportsController(IListRepository listRepo, IContactRepository contactRepo, IExportService exportService)
+        {
+            _listRepo = listRepo;
+            _contactRepo = contactRepo;
+            _exportService = exportService;
+        }
+
+        [HttpGet("csv")]
+        public async Task<IActionResult> ExportCsv(string listId)
+        {
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) return NotFound();
+
+            var contacts = await _contactRepo.GetByIdsAsync(list.ContactIds);
+            var csvBytes = await _exportService.ExportToCsvAsync(contacts);
+
+            return File(csvBytes, "text/csv", $"{list.Name}_contacts.csv");
+        }
+
+        [HttpPost("salesforce")]
+        public async Task<IActionResult> ExportSalesforce(string listId)
+        {
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) return NotFound();
+
+            var contacts = await _contactRepo.GetByIdsAsync(list.ContactIds);
+            var success = await _exportService.ExportToSalesforceAsync(contacts);
+
+            return success ? Ok("Exported to Salesforce") : StatusCode(500, "Failed to export to Salesforce");
+        }
+
+        [HttpPost("hubspot")]
+        public async Task<IActionResult> ExportHubspot(string listId)
+        {
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) return NotFound();
+
+            var contacts = await _contactRepo.GetByIdsAsync(list.ContactIds);
+            var success = await _exportService.ExportToHubspotAsync(contacts);
+
+            return success ? Ok("Exported to HubSpot") : StatusCode(500, "Failed to export to HubSpot");
+        }
+    }
+}
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Application.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class ListsController : ControllerBase
+    {
+        private readonly ListService _service;
+
+        public ListsController(ListService service)
+        {
+            _service = service;
+        }
+
+        // POST /api/lists → create a list
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] CreateListDto dto)
+        {
+            var id = await _service.CreateListAsync(dto);
+            return Ok(new { ListId = id });
+        }
+
+        // POST /api/lists/{id}/add-contact → add contact to list
+        [HttpPost("{id}/add-contact")]
+        public async Task<IActionResult> AddContact(string id, [FromBody] AddContactToListDto dto)
+        {
+            var success = await _service.AddContactToListAsync(id, dto.ContactId);
+            if (!success) return NotFound("List or Contact not found.");
+            return Ok("Contact added to list.");
+        }
+
+        // GET /api/lists/{id} → get list with contacts
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetList(string id)
+        {
+            var result = await _service.GetListWithContactsAsync(id);
+            if (result == null) return NotFound("List not found.");
+            return Ok(result);
+        }
+
+        // GET /api/search?keyword=satya
+        [HttpGet]
+        public async Task<IActionResult> MasterSearch([FromQuery] string keyword)
+        {
+            if (string.IsNullOrWhiteSpace(keyword))
+                return BadRequest("keyword is required");
+
+            var result = await _service.MasterSearchAsync(keyword.Trim());
+            return Ok(result);
+        }
+    }
+}
+
+using LeadGeneration.Domain.Interfaces;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class ReportingController : ControllerBase
+    {
+        private readonly IReportingService _reportingService;
+
+        public ReportingController(IReportingService reportingService)
+        {
+            _reportingService = reportingService;
+        }
+
+        [HttpGet("engagement-summary")]
+        public async Task<IActionResult> GetEngagementSummary(DateTime from, DateTime to)
+        {
+            var result = await _reportingService.GetEngagementSummaryAsync(from, to);
+            return Ok(result);
+        }
+
+        [HttpGet("sequence-performance/{sequenceId}")]
+        public async Task<IActionResult> GetSequencePerformance(string sequenceId)
+        {
+            var result = await _reportingService.GetSequencePerformanceAsync(sequenceId);
+            return Ok(result);
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Application.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LeadGeneration.API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class SequencesController : ControllerBase
+    {
+        private readonly SequenceService _service;
+        private readonly ISequenceInstanceRepository _instanceRepo;
+
+        public SequencesController(SequenceService service, ISequenceInstanceRepository instanceRepo)
+        {
+            _service = service;
+            _instanceRepo = instanceRepo;
+        }
+
+        // POST /api/sequences
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] CreateSequenceDto dto)
+        {
+            var id = await _service.CreateSequenceAsync(dto);
+            return Ok(new { SequenceId = id });
+        }
+
+        // POST /api/sequences/{id}/assign-list/{listId}
+        [HttpPost("{id}/assign-list/{listId}")]
+        public async Task<IActionResult> AssignToList(string id, string listId)
+        {
+            await _service.AssignSequenceToListAsync(id, listId);
+            return Ok("Sequence assigned to list.");
+        }
+
+        // GET /api/sequences/{id}/status
+        [HttpGet("{id}/status")]
+        public async Task<IActionResult> Status(string id)
+        {
+            // For the sequence: aggregate instances
+            var instances = await _instanceRepo.GetBySequenceIdAsync(id); // implement helper
+            var summary = new
+            {
+                SequenceId = id,
+                Total = instances.Count(),
+                Pending = instances.Count(i => i.Status == "pending"),
+                Running = instances.Count(i => i.Status == "running"),
+                Completed = instances.Count(i => i.Status == "completed"),
+                Failed = instances.Count(i => i.Status == "failed")
+            };
+            return Ok(summary);
+        }
+    }
+}
+
+{
+  "MongoSettings": {
+    "ConnectionString": "mongodb://localhost:27017",
+    "Database": "LeadGenDb"
+  },
+  "Apollo": {
+    "BaseUrl": "https://api.apollo.io",
+    "ApiKey": "YOUR_APOLLO_API_KEY"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+using MongoDB.Driver;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Application.Services;
+using LeadGneeration.Infrastructure.Repository;
+using LeadGneeration.Infrastructure;
+using Elasticsearch.Net;
+
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+
+//builder.Services.AddHangfire(cfg =>
+//{
+//    cfg.UseSimpleAssemblyNameTypeSerializer()
+//       .UseRecommendedSerializerSettings()
+//       .UseMemoryStorage(); // dev only
+//});
+//// Add services to the container.
+//builder.Services.AddHangfireServer();
+
+builder.Services.Configure<MongoDbContext>(builder.Configuration.GetSection("MongoDbSettings"));
+builder.Services.AddSingleton<IMongoDatabase>(sp =>
+{
+    var context = sp.GetRequiredService<MongoDbContext>();
+    return new MongoClient(builder.Configuration["MongoSettings:ConnectionString"])
+                .GetDatabase(context.DatabaseName);
+});
+
+builder.Services.AddHttpClient("Apollo", client =>
+{
+    client.BaseAddress = new Uri(builder.Configuration["Apollo:BaseUrl"]);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+builder.Services.AddSingleton<MongoDbContext>();
+builder.Services.AddScoped<ICompanyRepository, CompanyRepository>();
+builder.Services.AddScoped<IContactRepository, ContactRepository>();
+builder.Services.AddScoped<CompanyService>();
+builder.Services.AddScoped<ContactService>();
+builder.Services.AddScoped<ContactEnrichmentService>();
+builder.Services.AddScoped<IListRepository, ListRepository>();
+builder.Services.AddScoped<ListService>();
+
+builder.Services.AddScoped<ISequenceWorker, SequenceWorker>();
+builder.Services.AddScoped<SequenceService>();
+builder.Services.AddScoped<ISequenceRepository, SequenceRepository>();
+builder.Services.AddScoped<ISequenceInstanceRepository, SequenceInstanceRepository>();
+builder.Services.AddScoped<IEngagementLogRepository, EngagementLogRepository>();
+builder.Services.AddScoped<ITemplateRepository, TemplateRepository>();
+builder.Services.AddScoped<ICommunicationService, CommunicationService>(); // your implementation
+builder.Services.AddSingleton<IDateTimeProvider, DefaultDateTimeProvider>();
+builder.Services.AddScoped<IExportService, ExportService>();
+builder.Services.AddScoped<IReportingService, ReportingService>();
+//builder.Services.AddScoped<IImportService, ImportService>();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class AddContactToListDto
+    {
+        public string ContactId { get; set; }
+    }
+}
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class CreateCompanyDto
+    {
+        public string Name { get; set; }
+        public string Industry { get; set; }
+        public string Location { get; set; }
+        public int Size { get; set; }
+        public long Revenue { get; set; }
+        public string Website { get; set; }
+        public List<string> TechStack { get; set; }
+    }
+}
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class CreateContactDto
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Title { get; set; }
+        public string Department { get; set; }
+        public string Seniority { get; set; }
+        public string Email { get; set; }
+        public string Phone { get; set; }
+        public string LinkedIn { get; set; }
+        public string CompanyId { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class CreateListDto
+    {
+        public string Name { get; set; }
+        public string OwnerId { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class EnrichContactResultDto
+    {
+        public string ContactId { get; set; }
+        public bool Enriched { get; set; }
+        public string Message { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class ImportResultDto
+    {
+        public int Imported { get; set; }
+        public List<string> Errors { get; set; } = new();
+    }
+}
+
+
+using LeadGeneration.Domain.Models;
+using System.Collections.Generic;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class MasterSearchResultDto
+    {
+        public List<Contact> Contacts { get; set; } = new();
+        public List<Company> Companies { get; set; } = new();
+        public bool FromCache { get; set; }
+    }
+    public class MasterPersonDto
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Title { get; set; }
+        public string Department { get; set; }
+        public string Email { get; set; }
+        public string Phone { get; set; }
+        public string LinkedInUrl { get; set; }
+        public string CompanyName { get; set; }
+        public string CompanyDomain { get; set; }
+        public string CompanyLocation { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.DTO
+{
+    public class CreateSequenceDto
+    {
+        public string Name { get; set; }
+        public string OwnerId { get; set; }
+        public List<SequenceStepDto> Steps { get; set; }
+    }
+
+    public class SequenceStepDto
+    {
+        public int Day { get; set; }
+        public string Type { get; set; }
+        public string TemplateId { get; set; }
+        public string Script { get; set; }
+    }
+}
+
+
+using System.Threading.Tasks;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ApolloService
+    {
+        private readonly IApolloRepository _apolloRepo;
+
+        public ApolloService(IApolloRepository apolloRepo)
+        {
+            _apolloRepo = apolloRepo;
+        }
+
+        public async Task<ApolloSearchResult> SearchPeopleAsync(string keyword)
+        {
+            return await _apolloRepo.SearchPeopleFromApiAsync(keyword);
+        }
+    }
+}
+
+using LeadGeneration.Domain.Interfaces;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.Services
+{
+    public class CommunicationService : ICommunicationService
+    {
+        private readonly ILogger<CommunicationService> _logger;
+
+        public CommunicationService(ILogger<CommunicationService> logger)
+        {
+            _logger = logger;
+        }
+
+        public Task<bool> SendEmailAsync(string to, string subject, string body)
+        {
+            // TODO: real SMTP/SendGrid integration
+            _logger.LogInformation($"[Email → {to}] Subject: {subject}, Body: {body}");
+            return Task.FromResult(true); // return success
+        }
+
+        public Task<bool> LogCallAsync(string contactId, string script)
+        {
+            // TODO: real telephony/CRM integration
+            _logger.LogInformation($"[Call → Contact {contactId}] Script: {script}");
+            return Task.FromResult(true); // return success
+        }
+    }
+}
+
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+namespace LeadGeneration.Application.Services
+{
+    public class CompanyService
+    {
+        private readonly ICompanyRepository _companyRepo;
+
+        public CompanyService(ICompanyRepository companyRepo) =>
+            _companyRepo = companyRepo;
+
+        public async Task AddCompanyAsync(CreateCompanyDto dto)
+        {
+            var company = new Company
+            {
+                Id = ObjectId.GenerateNewId().ToString(),
+                Name = dto.Name,
+                Industry = dto.Industry,
+                Location = dto.Location,
+                Size = dto.Size,
+                Revenue = dto.Revenue,
+                Website = dto.Website,
+                TechStack = dto.TechStack
+            };
+
+            await _companyRepo.AddAsync(company);
+        }
+
+        public Task<IEnumerable<Company>> SearchCompaniesAsync(string industry, string location, string name) =>
+            _companyRepo.SearchAsync(industry, location, name);
+    }
+}
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ContactEnrichmentService
+    {
+        private readonly IContactRepository _contactRepo;
+
+        public ContactEnrichmentService(IContactRepository contactRepo)
+        {
+            _contactRepo = contactRepo;
+        }
+
+        // Dummy enrichment (Phase 2 MVP)
+        private (string email, string phone) GenerateFakeData(Contact c)
+        {
+            var email = string.IsNullOrEmpty(c.Email)
+                ? $"{c.FirstName.ToLower()}.{c.LastName.ToLower()}@example.com"
+                : c.Email;
+
+            var phone = string.IsNullOrEmpty(c.Phone)
+                ? $"+1-555-{new Random().Next(1000, 9999)}"
+                : c.Phone;
+
+            return (email, phone);
+        }
+
+        public async Task<EnrichContactResultDto> EnrichOneAsync(string id)
+        {
+            var contact = await _contactRepo.GetByIdAsync(id);
+            if (contact == null)
+                return new EnrichContactResultDto { ContactId = id, Enriched = false, Message = "Not found" };
+
+            var (email, phone) = GenerateFakeData(contact);
+
+            contact.Email = email;
+            contact.Phone = phone;
+            contact.LastEnrichedAt = DateTime.UtcNow;
+            contact.Source = "dummy-enrichment";
+
+            await _contactRepo.UpdateAsync(contact);
+
+            return new EnrichContactResultDto { ContactId = id, Enriched = true, Message = "Enriched successfully" };
+        }
+
+        public async Task<IEnumerable<EnrichContactResultDto>> BulkEnrichAsync(IEnumerable<string> ids)
+        {
+            var results = new List<EnrichContactResultDto>();
+            foreach (var id in ids)
+            {
+                var result = await EnrichOneAsync(id);
+                results.Add(result);
+            }
+            return results;
+        }
+    }
+}
+
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ContactService
+    {
+        private readonly IContactRepository _contactRepo;
+        private readonly ICompanyRepository _companyRepo;
+
+        public ContactService(IContactRepository contactRepo, ICompanyRepository companyRepo)
+        {
+            _contactRepo = contactRepo;
+            _companyRepo = companyRepo;
+        }
+
+        public async Task AddContactAsync(CreateContactDto dto)
+        {
+            var contact = new Contact
+            {
+                Id = ObjectId.GenerateNewId().ToString(),
+                FirstName = dto.FirstName,
+                LastName = dto.LastName,
+                Title = dto.Title,
+                Department = dto.Department,
+                Seniority = dto.Seniority,
+                Email = dto.Email,
+                Phone = dto.Phone,
+                LinkedIn = dto.LinkedIn,
+                CompanyId = dto.CompanyId
+            };
+
+            await _contactRepo.AddAsync(contact);
+        }
+
+        public async Task<IEnumerable<Contact>> SearchContactsAsync(string title, string companyName)
+        {
+            return await _contactRepo.SearchAsync(title, companyName);
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ExportService : IExportService
+    {
+        private readonly ILogger<ExportService> _logger;
+
+        public ExportService(ILogger<ExportService> logger)
+        {
+            _logger = logger;
+        }
+
+        public Task<byte[]> ExportToCsvAsync(IEnumerable<Contact> contacts)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("FirstName,LastName,Title,Email,Phone,CompanyId");
+
+            foreach (var c in contacts)
+            {
+                sb.AppendLine($"{c.FirstName},{c.LastName},{c.Title},{c.Email},{c.Phone},{c.CompanyId}");
+            }
+
+            return Task.FromResult(Encoding.UTF8.GetBytes(sb.ToString()));
+        }
+
+        public Task<bool> ExportToSalesforceAsync(IEnumerable<Contact> contacts)
+        {
+            // TODO: integrate with Salesforce API (e.g., REST/GraphQL)
+            _logger.LogInformation("Exporting {Count} contacts to Salesforce...", contacts is ICollection<Contact> list ? list.Count : 0);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> ExportToHubspotAsync(IEnumerable<Contact> contacts)
+        {
+            // TODO: integrate with Hubspot API
+            _logger.LogInformation("Exporting {Count} contacts to HubSpot...", contacts is ICollection<Contact> list ? list.Count : 0);
+            return Task.FromResult(true);
+        }
+    }
+}
+
+
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ListService
+    {
+        private readonly IListRepository _listRepo;
+        private readonly IContactRepository _contactRepo;
+        private readonly ICompanyRepository _companyRepo;
+        private readonly ApolloService _apollo;
+
+        public ListService(IListRepository listRepo, IContactRepository contactRepo, ICompanyRepository companyRepo, ApolloService apollo)
+        {
+            _listRepo = listRepo;
+            _contactRepo = contactRepo;
+            _companyRepo = companyRepo;
+            _apollo = apollo;
+        }
+
+        public async Task<string> CreateListAsync(CreateListDto dto)
+        {
+            var list = new ProspectList
+            {
+                Id = ObjectId.GenerateNewId().ToString(),
+                Name = dto.Name,
+                OwnerId = dto.OwnerId,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await _listRepo.AddAsync(list);
+            return list.Id;
+        }
+
+        public async Task<bool> AddContactToListAsync(string listId, string contactId)
+        {
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) return false;
+
+            var contact = await _contactRepo.GetByIdAsync(contactId);
+            if (contact == null) return false;
+
+            if (!list.ContactIds.Contains(contactId))
+                list.ContactIds.Add(contactId);
+
+            await _listRepo.UpdateAsync(list);
+            return true;
+        }
+
+        public async Task<object> GetListWithContactsAsync(string listId)
+        {
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) return null;
+
+            var contacts = new List<Contact>();
+            foreach (var id in list.ContactIds)
+            {
+                var c = await _contactRepo.GetByIdAsync(id);
+                if (c != null) contacts.Add(c);
+            }
+
+            return new
+            {
+                list.Id,
+                list.Name,
+                list.OwnerId,
+                list.CreatedAt,
+                Contacts = contacts
+            };
+        }
+
+        public async Task<MasterSearchResultDto> MasterSearchAsync(string keyword)
+        {
+            // 1) Search in local DB
+            var localContacts = (await _contactRepo.SearchAsync(title: keyword, companyId: null)).ToList();
+            var localCompanies = (await _companyRepo.SearchByNameAsync(keyword)).ToList();
+
+            if (localContacts.Any() || localCompanies.Any())
+            {
+                return new MasterSearchResultDto
+                {
+                    Contacts = localContacts,
+                    Companies = localCompanies,
+                    FromCache = true
+                };
+            }
+
+            // 2) Search Apollo if not found locally
+            var apolloResult = await _apollo.SearchPeopleAsync(keyword);
+
+            var savedContacts = new List<Contact>();
+            var savedCompanies = new List<Company>();
+
+            foreach (var p in apolloResult.People)
+            {
+                Company? companyEntity = null;
+
+                if (!string.IsNullOrWhiteSpace(p.CompanyDomain) || !string.IsNullOrWhiteSpace(p.CompanyName))
+                {
+                    var existing = await _companyRepo.FindByNameOrDomainAsync(p.CompanyName, p.CompanyDomain);
+
+                    if (existing == null)
+                    {
+                        companyEntity = new Company
+                        {
+                            Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(),
+                            Name = p.CompanyName ?? p.CompanyDomain ?? "",
+                            Industry = p.Industry,
+                            Location = p.CompanyLocation,
+                            Size = p.CompanySize ?? 0,
+                            Revenue = (long)(p.CompanyRevenue ?? 0),
+                            Website = p.CompanyDomain,
+                            TechStack = p.TechStack ?? new List<string>()
+                        };
+
+                        await _companyRepo.AddAsync(companyEntity);
+                        savedCompanies.Add(companyEntity);
+                    }
+                    else
+                    {
+                        companyEntity = existing;
+                    }
+                }
+
+                var contact = new Contact
+                {
+                    Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(),
+                    FirstName = p.FirstName,
+                    LastName = p.LastName,
+                    Title = p.Title,
+                    Department = p.Department,
+                    Seniority = p.Seniority,
+                    Email = p.Email,
+                    Phone = p.Phone,
+                    LinkedIn = p.LinkedInUrl,
+                    CompanyId = companyEntity?.Id
+                };
+
+                await _contactRepo.AddAsync(contact);
+                savedContacts.Add(contact);
+            }
+
+            return new MasterSearchResultDto
+            {
+                Contacts = savedContacts,
+                Companies = savedCompanies,
+                FromCache = false
+            };
+        }
+    }
+}
+
+using LeadGeneration.Domain.Interfaces;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Application.Services
+{
+    public class ReportingService : IReportingService
+    {
+        private readonly IEngagementLogRepository _logRepo;
+        private readonly ISequenceInstanceRepository _instanceRepo;
+
+        public ReportingService(IEngagementLogRepository logRepo, ISequenceInstanceRepository instanceRepo)
+        {
+            _logRepo = logRepo;
+            _instanceRepo = instanceRepo;
+        }
+
+        public async Task<object> GetEngagementSummaryAsync(DateTime from, DateTime to)
+        {
+            var logs = await _logRepo.GetByDateRangeAsync(from, to);
+
+            var grouped = logs
+                .GroupBy(l => l.EventType)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Count()
+                );
+
+            return new
+            {
+                From = from,
+                To = to,
+                TotalEvents = logs.Count(),
+                Breakdown = grouped
+            };
+        }
+
+        public async Task<object> GetSequencePerformanceAsync(string sequenceId)
+        {
+            var instances = await _instanceRepo.GetBySequenceIdAsync(sequenceId);
+
+            var total = instances.Count();
+            var completed = instances.Count(i => i.Status == "completed");
+            var failed = instances.Count(i => i.Status == "failed");
+            var running = instances.Count(i => i.Status == "running" || i.Status == "pending");
+
+            return new
+            {
+                SequenceId = sequenceId,
+                Total = total,
+                Completed = completed,
+                Failed = failed,
+                Active = running,
+                CompletionRate = total > 0 ? (completed * 100.0 / total) : 0
+            };
+        }
+    }
+}
+
+
+using Elasticsearch.Net;
+using Hangfire;
+using LeadGeneration.Application.DTO;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+namespace LeadGeneration.Application.Services
+{
+    public class SequenceService
+    {
+        private readonly ISequenceRepository _seqRepo;
+        private readonly IListRepository _listRepo;
+        private readonly ISequenceInstanceRepository _instanceRepo;
+        private readonly IBackgroundJobClient _hangfireClient; // from Hangfire
+        private readonly IDateTimeProvider _clock; // for testable times
+
+        public SequenceService(
+            ISequenceRepository seqRepo,
+            IListRepository listRepo,
+            ISequenceInstanceRepository instanceRepo,
+            IBackgroundJobClient hangfireClient,
+            IDateTimeProvider clock)
+        {
+            _seqRepo = seqRepo;
+            _listRepo = listRepo;
+            _instanceRepo = instanceRepo;
+            _hangfireClient = hangfireClient;
+            _clock = clock;
+        }
+
+        public async Task<string> CreateSequenceAsync(CreateSequenceDto dto)
+        {
+            var seq = new Sequence
+            {
+                Id = ObjectId.GenerateNewId().ToString(),
+                Name = dto.Name,
+                OwnerId = dto.OwnerId,
+                Steps = dto.Steps.Select((s, i) => new SequenceStep
+                {
+                    Day = s.Day,
+                    Type = s.Type,
+                    TemplateId = s.TemplateId,
+                    Script = s.Script,
+                    Order = i
+                }).ToList(),
+                CreatedAt = DateTime.UtcNow
+            };
+            await _seqRepo.AddAsync(seq);
+            return seq.Id;
+        }
+
+        // Assign sequence to an entire prospect list:
+        public async Task AssignSequenceToListAsync(string sequenceId, string listId)
+        {
+            var seq = await _seqRepo.GetByIdAsync(sequenceId);
+            if (seq == null) throw new ArgumentException("Sequence not found");
+
+            var list = await _listRepo.GetByIdAsync(listId);
+            if (list == null) throw new ArgumentException("List not found");
+
+            var now = _clock.Now();
+
+            foreach (var contactId in list.ContactIds)
+            {
+                var instance = new SequenceInstance
+                {
+                    Id = ObjectId.GenerateNewId().ToString(),
+                    SequenceId = sequenceId,
+                    ContactId = contactId,
+                    OwnerId = list.OwnerId,
+                    AssignedAt = now,
+                    CurrentStepIndex = 0,
+                    Status = "pending"
+                };
+
+                // Calculate next run based on step 0 day offset:
+                var firstStep = seq.Steps.OrderBy(s => s.Order).FirstOrDefault();
+                instance.NextRunAt = now.AddDays(firstStep?.Day ?? 0);
+
+                await _instanceRepo.AddAsync(instance);
+
+                // Schedule Hangfire job to run this instance at NextRunAt
+                var delay = instance.NextRunAt.Value - now;
+                if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+
+                // Schedule using interface so tests can mock
+                _hangfireClient.Schedule<ISequenceWorker>(
+                    w => w.ProcessInstanceStepAsync(instance.Id),
+                    delay
+                );
+            }
+        }
+    }
+}
+
+using Elasticsearch.Net;
+using Hangfire;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+
+namespace LeadGeneration.Application.Services
+{
+    public interface ISequenceWorker
+    {
+        Task ProcessInstanceStepAsync(string instanceId);
+    }
+
+    public class SequenceWorker : ISequenceWorker
+    {
+        private readonly ISequenceInstanceRepository _instanceRepo;
+        private readonly ISequenceRepository _sequenceRepo;
+        private readonly IContactRepository _contactRepo;
+        private readonly ITemplateRepository _templateRepo;
+        private readonly IEngagementLogRepository _logRepo;
+        private readonly ICommunicationService _comm; // sends emails/calls
+        private readonly IBackgroundJobClient _hangfireClient;
+        private readonly IDateTimeProvider _clock;
+
+        public SequenceWorker(
+            ISequenceInstanceRepository instanceRepo,
+            ISequenceRepository sequenceRepo,
+            IContactRepository contactRepo,
+            ITemplateRepository templateRepo,
+            IEngagementLogRepository logRepo,
+            ICommunicationService comm,
+            IBackgroundJobClient hangfireClient,
+            IDateTimeProvider clock)
+        {
+            _instanceRepo = instanceRepo;
+            _sequenceRepo = sequenceRepo;
+            _contactRepo = contactRepo;
+            _templateRepo = templateRepo;
+            _logRepo = logRepo;
+            _comm = comm;
+            _hangfireClient = hangfireClient;
+            _clock = clock;
+        }
+
+        public async Task ProcessInstanceStepAsync(string instanceId)
+        {
+            var instance = await _instanceRepo.GetByIdAsync(instanceId);
+            if (instance == null) return;
+
+            if (instance.Status != "pending" && instance.Status != "running") return;
+
+            var seq = await _sequenceRepo.GetByIdAsync(instance.SequenceId);
+            if (seq == null) return;
+
+            var steps = seq.Steps.OrderBy(s => s.Order).ToList();
+            if (instance.CurrentStepIndex >= steps.Count)
+            {
+                instance.Status = "completed";
+                await _instanceRepo.UpdateAsync(instance);
+                return;
+            }
+
+            var step = steps[instance.CurrentStepIndex];
+            var contact = await _contactRepo.GetByIdAsync(instance.ContactId);
+            if (contact == null)
+            {
+                instance.Status = "failed";
+                await _instanceRepo.UpdateAsync(instance);
+                return;
+            }
+
+            instance.Status = "running";
+            await _instanceRepo.UpdateAsync(instance);
+
+            // Execute step depending on type
+            if (step.Type.StartsWith("email", StringComparison.OrdinalIgnoreCase))
+            {
+                var template = await _templateRepo.GetByIdAsync(step.TemplateId);
+                var rendered = RenderTemplate(template, contact);
+
+                var success = await _comm.SendEmailAsync(contact.Email, template.Subject, rendered);
+
+                await _logRepo.AddAsync(new EngagementLog
+                {
+                    Id = ObjectId.GenerateNewId().ToString(),
+                    ContactId = contact.Id,
+                    EventType = success ? "email_sent" : "email_failed",
+                    SequenceId = seq.Id,
+                    Timestamp = _clock.Now(),
+                    Meta = $"{{ \"subject\": \"{template.Subject}\" }}"
+                });
+            }
+            else if (step.Type.Equals("call", StringComparison.OrdinalIgnoreCase))
+            {
+                var script = step.Script;
+                var success = await _comm.LogCallAsync(contact.Id, script);
+
+                await _logRepo.AddAsync(new EngagementLog
+                {
+                    Id = ObjectId.GenerateNewId().ToString(),
+                    ContactId = contact.Id,
+                    EventType = success ? "call_made" : "call_failed",
+                    SequenceId = seq.Id,
+                    Timestamp = _clock.Now(),
+                    Meta = $"{{ \"script\": \"{script}\" }}"
+                });
+            }
+
+            // mark step executed
+            instance.ExecutedStepIds.Add($"step-{instance.CurrentStepIndex}");
+            instance.CurrentStepIndex++;
+
+            // determine next run
+            var nextStep = steps.ElementAtOrDefault(instance.CurrentStepIndex);
+            if (nextStep == null)
+            {
+                instance.Status = "completed";
+                instance.NextRunAt = null;
+                await _instanceRepo.UpdateAsync(instance);
+                return;
+            }
+
+            // NextRunAt = AssignedAt + cumulative day offsets OR use last executed time + delta
+            var nextRun = _clock.Now().AddDays(nextStep.Day);
+            instance.NextRunAt = nextRun;
+            instance.Status = "pending";
+            await _instanceRepo.UpdateAsync(instance);
+
+            var delay = instance.NextRunAt.Value - _clock.Now();
+            if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+
+            _hangfireClient.Schedule<ISequenceWorker>(w => w.ProcessInstanceStepAsync(instance.Id), delay);
+        }
+
+        private string RenderTemplate(Template template, Contact contact)
+        {
+            if (template == null) return string.Empty;
+            var body = template.Body
+                .Replace("{{FirstName}}", contact.FirstName)
+                .Replace("{{LastName}}", contact.LastName)
+                .Replace("{{Company}}", contact.CompanyId ?? "");
+            return body;
+        }
+    }
+}
+
+using System.Threading.Tasks;
+using LeadGeneration.Domain.Models;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IApolloRepository
+    {
+        Task<ApolloSearchResult> SearchPeopleFromApiAsync(string keyword);
+    }
+}
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface ICommunicationService
+    {
+        Task<bool> SendEmailAsync(string to, string subject, string body);
+        Task<bool> LogCallAsync(string contactId, string script);
+    }
+}
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface ICompanyRepository
+    {
+        Task AddAsync(Company company);
+        Task<IEnumerable<Company>> SearchAsync(string industry, string location, string name);
+        Task<IEnumerable<Company>> SearchByNameAsync(string keyword);
+        Task<Company?> FindByNameOrDomainAsync(string name, string domain);
+    }
+}
+
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IContactRepository
+    {
+        Task<Contact> GetByIdAsync(string id);
+        Task<IEnumerable<Contact>> GetByIdsAsync(IEnumerable<string> ids); // for exports
+        Task<IEnumerable<Contact>> SearchAsync(string title = null, string companyName = null);
+        Task AddAsync(Contact contact);
+        Task UpdateAsync(Contact contact);
+        Task DeleteAsync(string id);
+        Task<IEnumerable<Contact>> SearchAsync(string title = null, string companyId = null, string freeText = null);
+
+    }
+}
+
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IEngagementLogRepository
+    {
+        Task AddAsync(EngagementLog log);
+        Task<IEnumerable<EngagementLog>> GetByDateRangeAsync(DateTime from, DateTime to);
+    }
+}
+
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IExportService
+    {
+        Task<byte[]> ExportToCsvAsync(IEnumerable<Contact> contacts);
+        Task<bool> ExportToSalesforceAsync(IEnumerable<Contact> contacts);
+        Task<bool> ExportToHubspotAsync(IEnumerable<Contact> contacts);
+    }
+}
+
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IListRepository
+    {
+        Task AddAsync(ProspectList list);
+        Task<ProspectList> GetByIdAsync(string id);
+        Task UpdateAsync(ProspectList list);
+    }
+}
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface IReportingService
+    {
+        Task<object> GetEngagementSummaryAsync(DateTime from, DateTime to);
+        Task<object> GetSequencePerformanceAsync(string sequenceId);
+    }
+}
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface ISequenceInstanceRepository
+    {
+        Task AddAsync(SequenceInstance instance);
+        Task<SequenceInstance> GetByIdAsync(string id);
+        Task UpdateAsync(SequenceInstance instance);
+        Task<IEnumerable<SequenceInstance>> GetPendingInstancesToRun(DateTime upTo);
+        Task<IEnumerable<SequenceInstance>> GetBySequenceIdAsync(string sequenceId);
+    }
+}
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface ISequenceRepository
+    {
+        Task AddAsync(Sequence sequence);
+        Task<Sequence> GetByIdAsync(string id);
+    }
+}
+
+using LeadGeneration.Domain.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Interfaces
+{
+    public interface ITemplateRepository
+    {
+        Task AddAsync(Template t);
+        Task<Template> GetByIdAsync(string id);
+    }
+}
+
+
+using System.Collections.Generic;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class ApolloSearchResult
+    {
+        public List<ApolloPerson> People { get; set; } = new();
+    }
+
+    public class ApolloPerson
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Title { get; set; }
+        public string Department { get; set; }
+        public string Email { get; set; }
+        public string Phone { get; set; }
+        public string LinkedInUrl { get; set; }
+
+        public string CompanyName { get; set; }
+        public string CompanyDomain { get; set; }
+        public string CompanyLocation { get; set; }
+
+        // ✅ Newly added
+        public string Industry { get; set; }
+        public string Seniority { get; set; }
+
+        public double? CompanyRevenue { get; set; }
+        public int? CompanySize { get; set; }
+        public List<string> TechStack { get; set; } = new();
+    }
+}
+
+
+	using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class Company
+    {
+        public string Id { get; set; }  // MongoDB ObjectId as string
+        public string Name { get; set; }
+        public string Industry { get; set; }
+        public string Location { get; set; }
+        public int Size { get; set; }
+        public long Revenue { get; set; }
+        public string Website { get; set; }
+        public List<string> TechStack { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class Contact
+    {
+        public string Id { get; set; }
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Title { get; set; }
+        public string Department { get; set; }
+        public string Seniority { get; set; }
+        public string Email { get; set; }
+        public string Phone { get; set; }
+        public string LinkedIn { get; set; }
+        public string CompanyId { get; set; }
+
+        public DateTime? LastEnrichedAt { get; set; }
+        public string Source { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class EngagementLog
+    {
+        public string Id { get; set; }
+        public string ContactId { get; set; }
+        public string EventType { get; set; } // "email_sent","email_open","reply","call_made"
+        public string SequenceId { get; set; }
+        public DateTime Timestamp { get; set; }
+        public string Meta { get; set; } // optional JSON blob (e.g., messageId, provider)
+    }
+}
+
+using System.Collections.Generic;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class MasterSearchResult
+    {
+        public List<MasterPerson> People { get; set; } = new();
+        public int TotalCount { get; set; }
+    }
+
+    public class MasterPerson
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Title { get; set; }
+        public string Department { get; set; }
+        public string Email { get; set; }
+        public string Phone { get; set; }
+        public string LinkedInUrl { get; set; }
+        public string CompanyName { get; set; }
+        public string CompanyDomain { get; set; }
+        public string CompanyLocation { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class ProspectList
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string OwnerId { get; set; }   // later link with user accounts
+        public List<string> ContactIds { get; set; } = new();
+        public DateTime CreatedAt { get; set; }
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class Sequence
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string OwnerId { get; set; }
+        public List<SequenceStep> Steps { get; set; } = new();
+        public DateTime CreatedAt { get; set; }
+    }
+
+    public class SequenceStep
+    {
+        public int Day { get; set; }           // offset in days from sequence start (0 = immediate)
+        public string Type { get; set; }      // "email", "follow-up-email", "call", etc.
+        public string TemplateId { get; set; } // optional, for email/templates
+        public string Script { get; set; }     // optional, for calls
+        public int Order { get; set; }        // explicit order if needed
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class SequenceInstance
+    {
+        public string Id { get; set; }
+        public string SequenceId { get; set; }
+        public string ContactId { get; set; }
+        public string OwnerId { get; set; }      // who owns this run
+        public DateTime AssignedAt { get; set; }
+        public int CurrentStepIndex { get; set; } = 0; // next step to run
+        public DateTime? NextRunAt { get; set; }       // calculated next run time
+        public string Status { get; set; } = "pending"; // pending, running, completed, paused, failed
+        public List<string> ExecutedStepIds { get; set; } = new();
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGeneration.Domain.Models
+{
+    public class Template
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string OwnerId { get; set; }
+        public string Subject { get; set; }   // for email
+        public string Body { get; set; }      // templated body (use tokens like {{FirstName}})
+        public DateTime CreatedAt { get; set; }
+    }
+}
+
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
+
+namespace LeadGeneration.Infrastructure.Repository
+{
+    public class ApolloRepository : IApolloRepository
+    {
+        private readonly IHttpClientFactory _httpFactory;
+        private readonly IConfiguration _config;
+
+        public ApolloRepository(IHttpClientFactory httpFactory, IConfiguration config)
+        {
+            _httpFactory = httpFactory;
+            _config = config;
+        }
+
+        public async Task<ApolloSearchResult> SearchPeopleFromApiAsync(string keyword)
+        {
+            var client = _httpFactory.CreateClient("Apollo");
+            var apiKey = _config["Apollo:ApiKey"];
+
+            var requestUri = "/api/v1/mixed_people/search?per_page=25";
+            var payload = new { q = keyword };
+
+            var req = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            req.Headers.Add("x-api-key", apiKey);
+
+            var resp = await client.SendAsync(req);
+            resp.EnsureSuccessStatusCode();
+
+            var json = await resp.Content.ReadAsStringAsync();
+            var j = JObject.Parse(json);
+
+            var result = new ApolloSearchResult();
+            var peopleNodes = new List<JToken>();
+
+            if (j["people"] != null)
+                peopleNodes.AddRange(j["people"].Children());
+            else if (j["data"]?["people"] != null)
+                peopleNodes.AddRange(j["data"]["people"].Children());
+
+            foreach (var node in peopleNodes)
+            {
+                var p = new ApolloPerson
+                {
+                    FirstName = node.Value<string>("first_name") ?? "",
+                    LastName = node.Value<string>("last_name") ?? "",
+                    Title = node.Value<string>("title") ?? "",
+                    Department = node.Value<string>("department") ?? "",
+                    Email = node.SelectToken("emails[0].email")?.ToString() ?? "",
+                    Phone = node.SelectToken("phones[0].phone")?.ToString() ?? "",
+                    LinkedInUrl = node.Value<string>("linkedin_url") ?? "",
+
+                    CompanyName = node.SelectToken("organization.name")?.ToString() ?? "",
+                    CompanyDomain = node.SelectToken("organization.domain")?.ToString() ?? "",
+                    CompanyLocation = node.SelectToken("organization.location")?.ToString() ?? "",
+
+                    // ✅ new fields
+                    Industry = node.SelectToken("organization.industry")?.ToString() ?? "",
+                    Seniority = node.Value<string>("seniority") ?? "",
+
+                    // ✅ revenue + size
+                    CompanyRevenue = double.TryParse(node.SelectToken("organization.revenue")?.ToString(), out var rev) ? rev : null,
+                    CompanySize = int.TryParse(node.SelectToken("organization.size")?.ToString(), out var sz) ? sz : null,
+
+                    // ✅ tech stack
+                    TechStack = node.SelectToken("organization.tech_stack") is JArray arr
+                        ? arr.Select(t => t.ToString()).ToList()
+                        : new List<string>()
+                };
+
+                result.People.Add(p);
+            }
+
+            return result;
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class CompanyRepository : ICompanyRepository
+    {
+        private readonly IMongoCollection<Company> _companies;
+
+        public CompanyRepository(MongoDbContext context) =>
+            _companies = context.Companies;
+
+        public async Task AddAsync(Company company) =>
+            await _companies.InsertOneAsync(company);
+
+        public async Task<IEnumerable<Company>> SearchAsync(string industry, string location, string name)
+        {
+            var filterBuilder = Builders<Company>.Filter;
+            var filters = new List<FilterDefinition<Company>>();
+
+            if (!string.IsNullOrEmpty(industry))
+                filters.Add(filterBuilder.Regex(c => c.Industry, new BsonRegularExpression(industry, "i")));
+
+            if (!string.IsNullOrEmpty(location))
+                filters.Add(filterBuilder.Regex(c => c.Location, new BsonRegularExpression(location, "i")));
+
+            if (!string.IsNullOrEmpty(name))
+                filters.Add(filterBuilder.Regex(c => c.Name, new BsonRegularExpression(name, "i")));
+
+            var filter = filters.Any() ? filterBuilder.And(filters) : FilterDefinition<Company>.Empty;
+            return await _companies.Find(filter).ToListAsync();
+        }
+
+        public async Task<IEnumerable<Company>> SearchByNameAsync(string keyword)
+        {
+            var filter = Builders<Company>.Filter.Or(
+                Builders<Company>.Filter.Regex(c => c.Name, new BsonRegularExpression(keyword, "i")),
+                Builders<Company>.Filter.Regex(c => c.Industry, new BsonRegularExpression(keyword, "i")),
+                Builders<Company>.Filter.Regex(c => c.Location, new BsonRegularExpression(keyword, "i"))
+            );
+
+            return await _companies.Find(filter).ToListAsync();
+        }
+
+        public async Task<Company?> FindByNameOrDomainAsync(string name, string domain)
+        {
+            var filter = Builders<Company>.Filter.Or(
+                Builders<Company>.Filter.Eq(c => c.Website, domain),
+                Builders<Company>.Filter.Eq(c => c.Name, name)
+            );
+            return await _companies.Find(filter).FirstOrDefaultAsync();
+        }
+
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class ContactRepository : IContactRepository
+    {
+        private readonly IMongoCollection<Contact> _contacts;
+        private readonly IMongoCollection<Company> _companies;
+
+        public ContactRepository(MongoDbContext context)
+        {
+            _contacts = context.Contacts;
+            _companies = context.Companies;
+        }
+
+        public async Task AddAsync(Contact contact) =>
+            await _contacts.InsertOneAsync(contact);
+
+        public async Task<IEnumerable<Contact>> SearchAsync(string title, string companyName)
+        {
+            var filterBuilder = Builders<Contact>.Filter;
+            var filters = new List<FilterDefinition<Contact>>();
+
+            if (!string.IsNullOrEmpty(title))
+                filters.Add(filterBuilder.Regex(c => c.Title, new BsonRegularExpression(title, "i")));
+
+            // If searching by company name, resolve companyId
+            if (!string.IsNullOrEmpty(companyName))
+            {
+                var company = await _companies
+                    .Find(c => c.Name.ToLower().Contains(companyName.ToLower()))
+                    .FirstOrDefaultAsync();
+
+                if (company != null)
+                    filters.Add(filterBuilder.Eq(c => c.CompanyId, company.Id));
+            }
+
+            var filter = filters.Any() ? filterBuilder.And(filters) : FilterDefinition<Contact>.Empty;
+            return await _contacts.Find(filter).ToListAsync();
+        }
+
+        public async Task<Contact> GetByIdAsync(string id) =>
+            await _contacts.Find(c => c.Id == id).FirstOrDefaultAsync();
+
+        public async Task UpdateAsync(Contact contact) =>
+            await _contacts.ReplaceOneAsync(c => c.Id == contact.Id, contact);
+
+        public async Task DeleteAsync(string id)
+        {
+            await _contacts.DeleteOneAsync(c => c.Id == id);
+        }
+
+        public async Task<IEnumerable<Contact>> GetByIdsAsync(IEnumerable<string> ids)
+        {
+            var filter = Builders<Contact>.Filter.In(c => c.Id, ids);
+            return await _contacts.Find(filter).ToListAsync();
+        }
+        public async Task<IEnumerable<Contact>> SearchAsync(string title = null, string companyId = null, string freeText = null)
+        {
+            var fb = Builders<Contact>.Filter;
+            var filter = FilterDefinition<Contact>.Empty;
+
+            if (!string.IsNullOrWhiteSpace(title))
+                filter &= fb.Regex(c => c.Title, new BsonRegularExpression(title, "i"));
+
+            if (!string.IsNullOrWhiteSpace(companyId))
+                filter &= fb.Eq(c => c.CompanyId, companyId);
+
+            if (!string.IsNullOrWhiteSpace(freeText))
+            {
+                var regex = new BsonRegularExpression(freeText, "i");
+                var textFilter = fb.Or(
+                    fb.Regex(c => c.FirstName, regex),
+                    fb.Regex(c => c.LastName, regex),
+                    fb.Regex(c => c.Email, regex),
+                    fb.Regex(c => c.LinkedIn, regex),
+                    fb.Regex(c => c.Title, regex)
+                );
+                filter &= textFilter;
+            }
+
+            return await _contacts.Find(filter).ToListAsync();
+        }
+
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class EngagementLogRepository : IEngagementLogRepository
+    {
+        private readonly IMongoCollection<EngagementLog> _collection;
+
+        //public EngagementLogRepository(MongoDbContext context)
+        //{
+        //    _collection = context.GetCollection<EngagementLog>("engagementLogs");
+        //}
+
+        public async Task AddAsync(EngagementLog log)
+        {
+            await _collection.InsertOneAsync(log);
+        }
+
+        public async Task<IEnumerable<EngagementLog>> GetByContactIdAsync(string contactId)
+        {
+            var filter = Builders<EngagementLog>.Filter.Eq(x => x.ContactId, contactId);
+            return await _collection.Find(filter).ToListAsync();
+        }
+
+        public async Task<IEnumerable<EngagementLog>> GetBySequenceIdAsync(string sequenceId)
+        {
+            var filter = Builders<EngagementLog>.Filter.Eq(x => x.SequenceId, sequenceId);
+            return await _collection.Find(filter).ToListAsync();
+        }
+
+        public async Task<IEnumerable<EngagementLog>> GetByDateRangeAsync(DateTime from, DateTime to)
+        {
+            var filter = Builders<EngagementLog>.Filter.And(
+                Builders<EngagementLog>.Filter.Gte(l => l.Timestamp, from),
+                Builders<EngagementLog>.Filter.Lte(l => l.Timestamp, to)
+            );
+
+            return await _collection.Find(filter).ToListAsync();
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class ListRepository : IListRepository
+    {
+        private readonly IMongoCollection<ProspectList> _lists;
+
+        public async Task AddAsync(ProspectList list) =>
+            await _lists.InsertOneAsync(list);
+
+        public async Task<ProspectList> GetByIdAsync(string id) =>
+            await _lists.Find(l => l.Id == id).FirstOrDefaultAsync();
+
+        public async Task UpdateAsync(ProspectList list) =>
+            await _lists.ReplaceOneAsync(l => l.Id == list.Id, list);
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class SequenceInstanceRepository : ISequenceInstanceRepository
+    {
+        private readonly IMongoCollection<SequenceInstance> _collection;
+
+        public SequenceInstanceRepository(IMongoDatabase db)
+        {
+            _collection = db.GetCollection<SequenceInstance>("sequenceInstances");
+        }
+
+        public async Task AddAsync(SequenceInstance instance)
+        {
+            await _collection.InsertOneAsync(instance);
+        }
+
+        public async Task<SequenceInstance> GetByIdAsync(string id)
+        {
+            return await _collection.Find(x => x.Id == id).FirstOrDefaultAsync();
+        }
+
+        public async Task UpdateAsync(SequenceInstance instance)
+        {
+            await _collection.ReplaceOneAsync(x => x.Id == instance.Id, instance);
+        }
+
+        public async Task<IEnumerable<SequenceInstance>> GetPendingInstancesToRun(DateTime upTo)
+        {
+            var filter = Builders<SequenceInstance>.Filter.Lte(x => x.NextRunAt, upTo) &
+                         Builders<SequenceInstance>.Filter.Eq(x => x.Status, "pending");
+            return await _collection.Find(filter).ToListAsync();
+        }
+
+        // NEW method implementation
+        public async Task<IEnumerable<SequenceInstance>> GetBySequenceIdAsync(string sequenceId)
+        {
+            var filter = Builders<SequenceInstance>.Filter.Eq(x => x.SequenceId, sequenceId);
+            return await _collection.Find(filter).ToListAsync();
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class SequenceRepository : ISequenceRepository
+    {
+        private readonly IMongoCollection<Sequence> _collection;
+
+        //public SequenceRepository(MongoDbContext context)
+        //{
+        //    _collection = context.GetCollection<Sequence>("sequences");
+        //}
+
+        public async Task AddAsync(Sequence sequence)
+        {
+            await _collection.InsertOneAsync(sequence);
+        }
+
+        public async Task<Sequence> GetByIdAsync(string id)
+        {
+            return await _collection.Find(x => x.Id == id).FirstOrDefaultAsync();
+        }
+
+        public async Task UpdateAsync(Sequence sequence)
+        {
+            await _collection.ReplaceOneAsync(x => x.Id == sequence.Id, sequence);
+        }
+
+        public async Task<IEnumerable<Sequence>> GetAllAsync()
+        {
+            return await _collection.Find(_ => true).ToListAsync();
+        }
+    }
+}
+
+
+using LeadGeneration.Domain.Interfaces;
+using LeadGeneration.Domain.Models;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure.Repository
+{
+    public class TemplateRepository : ITemplateRepository
+    {
+        private readonly IMongoCollection<Template> _collection;
+
+        //public TemplateRepository(MongoDbContext context)
+        //{
+        //    _collection = context.GetCollection<Template>("templates");
+        //}
+
+        public async Task AddAsync(Template template)
+        {
+            await _collection.InsertOneAsync(template);
+        }
+
+        public async Task<Template> GetByIdAsync(string id)
+        {
+            return await _collection.Find(x => x.Id == id).FirstOrDefaultAsync();
+        }
+
+        public async Task UpdateAsync(Template template)
+        {
+            await _collection.ReplaceOneAsync(x => x.Id == template.Id, template);
+        }
+
+        public async Task<IEnumerable<Template>> GetAllAsync()
+        {
+            return await _collection.Find(_ => true).ToListAsync();
+        }
+    }
+}
+
+
+using Elasticsearch.Net;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure
+{
+    public class DefaultDateTimeProvider : IDateTimeProvider
+    {
+        public DateTime DeadTime(int attempts, TimeSpan? timeoutFactor, TimeSpan? maxDeadTimeout)
+        {
+            throw new NotImplementedException();
+        }
+
+        public DateTime Now() => DateTime.Now;
+
+        public DateTime UtcNow() => DateTime.UtcNow;
+    }
+}
+
+using LeadGeneration.Domain.Models;
+using Microsoft.Extensions.Configuration;
+using MongoDB.Driver;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LeadGneeration.Infrastructure
+{
+    public class MongoDbContext
+    {
+        private readonly IMongoDatabase _database;
+
+        public MongoDbContext(IConfiguration config)
+        {
+            var connectionString = config["MongoSettings:ConnectionString"];
+            var databaseName = config["MongoSettings:Database"];
+
+            var client = new MongoClient(connectionString);
+            _database = client.GetDatabase(databaseName);
+
+            DatabaseName = databaseName;
+        }
+
+        public string DatabaseName { get; }
+
+        public IMongoCollection<Company> Companies => _database.GetCollection<Company>("Companies");
+        public IMongoCollection<Contact> Contacts => _database.GetCollection<Contact>("Contacts");
+        public IMongoCollection<Contact> Lists => _database.GetCollection<Contact>("Lists");
+    }
+}
